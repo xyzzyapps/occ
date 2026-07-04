@@ -90,7 +90,7 @@ def is_pure_interface(class_cursor):
                 return False
     return True
 
-def check_node(node, filepath, violations):
+def check_node(node, filepath, violations, rules_options):
     """Inspect an AST node for Orthodox C++ rule violations."""
     # 1. Exception Check
     if node.kind == clang.cindex.CursorKind.CXX_TRY_STMT:
@@ -153,14 +153,87 @@ def check_node(node, filepath, violations):
             violations.append(Violation(filepath, node.location.line, node.location.column, 
                                         f"Inclusion of forbidden header <{header_name}> (heavy standard library)."))
 
-def traverse_ast(node, filepath, violations):
+    # Advanced rule checks:
+
+    # 5. Template Ban Check
+    if rules_options.get("ban_templates"):
+        # Check template declarations
+        if node.kind in (clang.cindex.CursorKind.CLASS_TEMPLATE, 
+                         clang.cindex.CursorKind.FUNCTION_TEMPLATE, 
+                         clang.cindex.CursorKind.CLASS_TEMPLATE_PARTIAL_SPECIALIZATION):
+            violations.append(Violation(filepath, node.location.line, node.location.column,
+                                        f"Templates are forbidden: '{node.spelling}'."))
+        # Check template type usage (e.g. instantiations in variables, fields, parameters)
+        elif node.kind in (clang.cindex.CursorKind.VAR_DECL, clang.cindex.CursorKind.FIELD_DECL, clang.cindex.CursorKind.PARM_DECL) and node.type is not None and node.type.get_num_template_arguments() > 0:
+            violations.append(Violation(filepath, node.location.line, node.location.column,
+                                        f"Template instantiation/type '{node.type.spelling}' is forbidden."))
+
+    # 6. Preprocessor Ban Check
+    if rules_options.get("ban_preprocessor"):
+        if node.kind == clang.cindex.CursorKind.MACRO_DEFINITION:
+            violations.append(Violation(filepath, node.location.line, node.location.column,
+                                        f"Macro definition is forbidden: '#define {node.spelling}'."))
+        elif node.kind == clang.cindex.CursorKind.MACRO_INSTANTIATION:
+            violations.append(Violation(filepath, node.location.line, node.location.column,
+                                        f"Macro expansion is forbidden: '{node.spelling}'."))
+
+    # 7. Heap Allocation Ban Check
+    if rules_options.get("ban_heap"):
+        if node.kind == clang.cindex.CursorKind.CXX_NEW_EXPR:
+            violations.append(Violation(filepath, node.location.line, node.location.column,
+                                        "C++ heap allocation ('new') is forbidden."))
+        elif node.kind == clang.cindex.CursorKind.CXX_DELETE_EXPR:
+            violations.append(Violation(filepath, node.location.line, node.location.column,
+                                        "C++ heap deallocation ('delete') is forbidden."))
+        elif node.kind == clang.cindex.CursorKind.CALL_EXPR:
+            # Check C standard library allocators
+            if node.spelling in ("malloc", "calloc", "realloc", "free"):
+                violations.append(Violation(filepath, node.location.line, node.location.column,
+                                            f"C standard library allocator call '{node.spelling}' is forbidden."))
+
+    # 8. Operator Overloading Ban Check
+    if rules_options.get("ban_operators"):
+        if node.kind == clang.cindex.CursorKind.CXX_METHOD:
+            if node.spelling.startswith("operator") and node.spelling != "operator=":
+                violations.append(Violation(filepath, node.location.line, node.location.column,
+                                            f"Custom operator overloading is forbidden: '{node.spelling}'."))
+
+    # 9. Lambda Expressions Ban Check
+    if rules_options.get("ban_lambdas"):
+        if node.kind == clang.cindex.CursorKind.LAMBDA_EXPR:
+            violations.append(Violation(filepath, node.location.line, node.location.column,
+                                        "Lambda expressions are forbidden."))
+
+    # 10. Enforce explicit on single-argument constructors
+    if rules_options.get("enforce_explicit"):
+        if node.kind == clang.cindex.CursorKind.CONSTRUCTOR:
+            params = [c for c in node.get_children() if c.kind == clang.cindex.CursorKind.PARM_DECL]
+            if len(params) == 1:
+                class_name = ""
+                if node.semantic_parent:
+                    class_name = node.semantic_parent.spelling
+                param_type = params[0].type.spelling
+                
+                is_copy_or_move = False
+                if class_name:
+                    if f"{class_name} &" in param_type or f"{class_name} &&" in param_type:
+                        is_copy_or_move = True
+                
+                if not is_copy_or_move:
+                    tokens = list(node.get_tokens())
+                    is_explicit = any(t.spelling == "explicit" for t in tokens)
+                    if not is_explicit:
+                        violations.append(Violation(filepath, node.location.line, node.location.column,
+                                                    f"Single-argument constructor '{node.spelling}' must be declared 'explicit'."))
+
+def traverse_ast(node, filepath, violations, rules_options):
     """Recursively traverse the AST to check nodes in the target file."""
     # Ensure the node belongs to the file being checked
     if node.location.file and os.path.abspath(node.location.file.name) == os.path.abspath(filepath):
-        check_node(node, filepath, violations)
+        check_node(node, filepath, violations, rules_options)
         
     for child in node.get_children():
-        traverse_ast(child, filepath, violations)
+        traverse_ast(child, filepath, violations, rules_options)
 
 def get_ucrt64_includes():
     """Retrieve standard system include paths from the MSYS2 UCRT64 toolchain."""
@@ -183,7 +256,7 @@ def get_ucrt64_includes():
                         includes.append(f"-isystem{target_specific}")
     return includes
 
-def check_file(filepath, verbose=False):
+def check_file(filepath, rules_options, verbose=False):
     """Parse and check a single C++ source file."""
     print(f"Checking {filepath}...")
     index = clang.cindex.Index.create()
@@ -218,7 +291,7 @@ def check_file(filepath, verbose=False):
             print(f"Diagnostic in {diag_file}:{diag.location.line}:{diag.location.column}: {diag.spelling}")
             
     # Even if there are compiler errors, we can still attempt to run rule checks on the partial AST
-    traverse_ast(tu.cursor, filepath, violations)
+    traverse_ast(tu.cursor, filepath, violations, rules_options)
     
     return not has_compile_errors, violations
 
@@ -226,6 +299,12 @@ def main():
     parser = argparse.ArgumentParser(description="Enforce Orthodox C++ constraints on source files.")
     parser.add_argument("path", help="Path to a C++ source file or directory of source files.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Print detailed compiler diagnostics.")
+    parser.add_argument("--ban-templates", action="store_true", help="Ban all template declarations and usages.")
+    parser.add_argument("--ban-preprocessor", action="store_true", help="Ban all macro definitions and expansions.")
+    parser.add_argument("--ban-heap", action="store_true", help="Ban C++ new/delete and standard C library allocation functions.")
+    parser.add_argument("--ban-operators", action="store_true", help="Ban custom operator overloading declarations (excluding operator=).")
+    parser.add_argument("--ban-lambdas", action="store_true", help="Ban all C++ lambda expressions.")
+    parser.add_argument("--enforce-explicit", action="store_true", help="Enforce that all single-argument constructors are marked 'explicit'.")
     args = parser.parse_args()
 
     if not setup_libclang():
@@ -241,11 +320,20 @@ def main():
     else:
         targets.append(args.path)
 
+    rules_options = {
+        "ban_templates": args.ban_templates,
+        "ban_preprocessor": args.ban_preprocessor,
+        "ban_heap": args.ban_heap,
+        "ban_operators": args.ban_operators,
+        "ban_lambdas": args.ban_lambdas,
+        "enforce_explicit": args.enforce_explicit,
+    }
+
     all_success = True
     total_violations = 0
 
     for target in targets:
-        success, violations = check_file(target, args.verbose)
+        success, violations = check_file(target, rules_options, args.verbose)
         if not success:
             all_success = False
             

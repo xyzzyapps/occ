@@ -18,6 +18,7 @@ graph TD
     C -->|RTTI Rules| D
     C -->|Inheritance Rules| D
     C -->|Header Rules| D
+    C -->|Advanced Rules| D
     D -->|Yes| E[Report Error with Line/Col]
     D -->|No| F[Continue Traversal]
     E --> G[Exit Code 1]
@@ -28,7 +29,7 @@ graph TD
 
 ## Enforced Rules
 
-`occ` enforces the following Orthodox C++ restrictions:
+### Standard Rules (Always Active)
 
 1. **No Exception Handling**: 
    - Rejects `throw` expressions.
@@ -46,6 +47,17 @@ graph TD
 4. **Header and Library Constraints**:
    - Rejects usage of heavy standard libraries like `<iostream>` and `<sstream>` which introduce significant code bloat and runtime overhead.
    - Recommends C-style headers or custom minimal alternatives.
+
+### Optional Advanced Rules
+
+These rules can be selectively enabled using command-line arguments:
+
+1. **`--ban-templates`**: Completely forbids defining templates (`template <...>`, `class template`, `function template`, etc.) and using template types (e.g. `Box<int>` or `std::vector<float>`).
+2. **`--ban-preprocessor`**: Forbids preprocessor macro definitions (`#define`) and preprocessor macro expansions (macro usages). `#include` directives are still allowed.
+3. **`--ban-heap`**: Forbids C++ standard heap allocations (`new` and `delete` expressions) as well as C dynamic allocators (`malloc`, `calloc`, `realloc`, `free`).
+4. **`--ban-operators`**: Forbids custom C++ operator overloading declarations (such as `operator+`, `operator[]`), with the exception of the standard copy/move assignment operator (`operator=`).
+5. **`--ban-lambdas`**: Forbids all C++ lambda expressions (`[](){}`).
+6. **`--enforce-explicit`**: Enforces that all single-argument constructors (excluding copy and move constructors) are explicitly marked with the `explicit` specifier to prevent implicit conversions.
 
 ---
 
@@ -71,8 +83,17 @@ python -m venv .venv
 ## Usage
 
 ```powershell
-.venv\Scripts\python occ.py <file-or-directory-path>
+.venv\Scripts\python occ.py [options] <file-or-directory-path>
 ```
+
+### Options:
+- `-v`, `--verbose`: Print detailed compiler diagnostics.
+- `--ban-templates`: Ban all template declarations and usages.
+- `--ban-preprocessor`: Ban all macro definitions and expansions.
+- `--ban-heap`: Ban C++ `new`/`delete` and standard C library allocation functions.
+- `--ban-operators`: Ban custom operator overloading declarations (excluding `operator=`).
+- `--ban-lambdas`: Ban all C++ lambda expressions.
+- `--enforce-explicit`: Enforce that all single-argument constructors are marked `explicit`.
 
 ### Exit Codes:
 - `0`: All files conform to the Orthodox C++ subset.
