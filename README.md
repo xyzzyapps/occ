@@ -109,4 +109,4 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## Credits
 
-**Signature — DeepSeek.** Core implementation and documentation of this checker were produced with DeepSeek.
+Core implementation and documentation of this checker were produced with Gemini 3.5.
