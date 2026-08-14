@@ -98,3 +98,15 @@ python -m venv .venv
 ### Exit Codes:
 - `0`: All files conform to the Orthodox C++ subset.
 - `1`: Violations were found, or compilation/parsing errors occurred.
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+---
+
+## Credits
+
+**Signature — DeepSeek.** Core implementation and documentation of this checker were produced with DeepSeek.
